@@ -423,15 +423,20 @@ const Room = ({ username }) => {
     if (!isScreenSharing) {
       try {
         const stream = await navigator.mediaDevices.getDisplayMedia({ 
-          video: { frameRate: { ideal: 60 } },
+          video: { 
+            frameRate: { ideal: 30 },
+            cursor: "always"
+          },
           audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
+            autoGainControl: false,
+            echoCancellation: false,
+            noiseSuppression: false,
+            channelCount: 2
           }
         });
         
         const videoTrack = stream.getVideoTracks()[0];
+        if (videoTrack) videoTrack.contentHint = 'motion';
         const screenAudioTrack = stream.getAudioTracks()[0];
         
         videoTrack.onended = () => stopScreenShare();
@@ -469,9 +474,19 @@ const Room = ({ username }) => {
           return newStream;
         });
 
-        Object.values(peerConnections.current).forEach(pc => {
+        Object.values(peerConnections.current).forEach(async pc => {
           const vTransceiver = pc.getTransceivers().find(t => t.receiver.track.kind === 'video');
-          if (vTransceiver) vTransceiver.sender.replaceTrack(videoTrack);
+          if (vTransceiver) {
+            await vTransceiver.sender.replaceTrack(videoTrack);
+            try {
+              const params = vTransceiver.sender.getParameters();
+              if (!params.encodings) params.encodings = [{}];
+              params.encodings[0].maxBitrate = 3500000; // 3.5 Mbps cap for stability
+              vTransceiver.sender.setParameters(params);
+            } catch (e) {
+              console.warn("Could not set sender parameters", e);
+            }
+          }
           
           if (finalAudioTrack) {
             const aTransceiver = pc.getTransceivers().find(t => t.receiver.track.kind === 'audio');
