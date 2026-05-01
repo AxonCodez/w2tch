@@ -35,6 +35,8 @@ const Room = ({ username }) => {
   const [reactions, setReactions] = useState([]);
   const [networkStats, setNetworkStats] = useState({ ping: 0, quality: 'Good' });
   const [isPipCollapsed, setIsPipCollapsed] = useState(false);
+  const [volumes, setVolumes] = useState({}); // { userId: isTalking }
+  const [isPipHorizontal, setIsPipHorizontal] = useState(false);
 
   // Setup & Room Info State
   const [setupComplete, setSetupComplete] = useState(false);
@@ -298,7 +300,7 @@ const Room = ({ username }) => {
     pc.ontrack = (event) => {
       setPeers(prev => {
         const stream = prev[targetId] || new MediaStream();
-        if (!stream.getTracks().includes(event.track)) {
+        if (!stream.getTracks().find(t => t.id === event.track.id)) {
           stream.addTrack(event.track);
         }
         return { ...prev, [targetId]: new MediaStream(stream.getTracks()) };
@@ -520,6 +522,65 @@ const Room = ({ username }) => {
 
   const activeSharerId = isScreenSharing ? 'local' : Object.keys(remoteSharers).find(id => remoteSharers[id]);
 
+  // Voice Activity Detection
+  useEffect(() => {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const analyzers = {};
+    const animationFrameIds = {};
+
+    const monitorStream = (userId, stream) => {
+      if (!stream || stream.getAudioTracks().length === 0) {
+        setVolumes(prev => ({ ...prev, [userId]: false }));
+        return;
+      }
+
+      try {
+        const source = audioCtx.createMediaStreamSource(stream);
+        const analyzer = audioCtx.createAnalyser();
+        analyzer.fftSize = 512;
+        source.connect(analyzer);
+        analyzers[userId] = { analyzer, source };
+
+        const bufferLength = analyzer.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+
+        const checkVolume = () => {
+          analyzer.getByteFrequencyData(dataArray);
+          let sum = 0;
+          for (let i = 0; i < bufferLength; i++) {
+            sum += dataArray[i];
+          }
+          const average = sum / bufferLength;
+          setVolumes(prev => ({ ...prev, [userId]: average > 15 }));
+          animationFrameIds[userId] = requestAnimationFrame(checkVolume);
+        };
+        checkVolume();
+      } catch (e) {
+        console.error("VAD error", e);
+      }
+    };
+
+    // Monitor local stream
+    if (micOn && localStream.getAudioTracks().length > 0) {
+      monitorStream('local', localStream);
+    } else {
+      setVolumes(prev => ({ ...prev, local: false }));
+    }
+
+    // Monitor remote streams
+    Object.entries(peers).forEach(([id, stream]) => {
+      if (stream.getAudioTracks().length > 0) {
+        monitorStream(id, stream);
+      }
+    });
+
+    return () => {
+      Object.values(animationFrameIds).forEach(cancelAnimationFrame);
+      Object.values(analyzers).forEach(({ source }) => source.disconnect());
+      audioCtx.close();
+    };
+  }, [micOn, localStream, peers]);
+
   const getAvatarUrl = (user) => {
     if (user?.avatar) return `https://api.dicebear.com/7.x/${user.avatar}`;
     const seed = user?.username || user || 'default';
@@ -669,7 +730,7 @@ const Room = ({ username }) => {
               
               <div className="pip-videos">
                 {activeSharerId !== 'local' && (
-                  <div className="video-wrapper pip-video glass-panel">
+                    <div className={`video-wrapper pip-video glass-panel ${volumes['local'] && !videoOn ? 'is-talking' : ''}`}>
                     {!videoOn && <img src={getAvatarUrl({ username, avatar: `${avatarStyle}/svg?seed=${avatarSeed}&backgroundColor=8b5cf6` })} alt="avatar" className="avatar-overlay" />}
                     <video ref={localVideoCallback} autoPlay muted playsInline className="video-element" />
                     <div className="video-badge">You</div>
@@ -678,7 +739,7 @@ const Room = ({ username }) => {
                 {Object.entries(peers).map(([id, stream]) => {
                   if (id === activeSharerId) return null;
                   return (
-                    <div key={id} className="video-wrapper pip-video glass-panel">
+                    <div key={id} className={`video-wrapper pip-video glass-panel ${volumes[id] && !remoteCameraStatus[id] ? 'is-talking' : ''}`}>
                       {!remoteCameraStatus[id] && <img src={getAvatarUrl(participants[id])} alt="avatar" className="avatar-overlay" />}
                       <VideoPlayer stream={stream} />
                       <div className="video-badge">{participants[id]?.username || 'Peer'}</div>
@@ -690,14 +751,14 @@ const Room = ({ username }) => {
           ) : (
             /* Normal Grid Layout when no one is sharing */
             <>
-              <div className="video-wrapper main-video glass-panel">
+              <div className={`video-wrapper main-video glass-panel ${volumes['local'] && !videoOn ? 'is-talking' : ''}`}>
                 {!videoOn && <img src={getAvatarUrl({ username, avatar: `${avatarStyle}/svg?seed=${avatarSeed}&backgroundColor=8b5cf6` })} alt="avatar" className="avatar-overlay" />}
                 <video ref={localVideoCallback} autoPlay muted playsInline className="video-element" />
                 <div className="video-badge">You</div>
               </div>
               
               {Object.entries(peers).map(([id, stream]) => (
-                <div key={id} className="video-wrapper peer-video glass-panel">
+                <div key={id} className={`video-wrapper peer-video glass-panel ${volumes[id] && !remoteCameraStatus[id] ? 'is-talking' : ''}`}>
                   {!remoteCameraStatus[id] && <img src={getAvatarUrl(participants[id])} alt="avatar" className="avatar-overlay" />}
                   <VideoPlayer stream={stream} />
                   <div className="video-badge">{participants[id]?.username || 'Peer'}</div>

@@ -76,6 +76,28 @@
   100% { transform: translateY(0px); }
 }
 
+.video-wrapper.is-talking .avatar-overlay {
+  box-shadow: 0 0 0 4px var(--success), 0 0 20px var(--success);
+  border: 2px solid white;
+}
+
+.video-wrapper.is-talking::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 3px solid var(--success);
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 3;
+  animation: pulseTalking 2s infinite;
+}
+
+@keyframes pulseTalking {
+  0% { opacity: 0.3; }
+  50% { opacity: 1; }
+  100% { opacity: 0.3; }
+}
+
 /* Active Sharer Main Stage */
 .main-stage-wrapper {
   width: 100%;
