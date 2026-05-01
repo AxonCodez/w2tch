@@ -203,6 +203,16 @@ const Room = ({ username }) => {
 
     socket.on('camera-status', ({ userId, isOn }) => {
       setRemoteCameraStatus(prev => ({ ...prev, [userId]: isOn }));
+      if (!isOn) {
+        setPeers(prev => {
+          const stream = prev[userId];
+          if (stream) {
+            stream.getVideoTracks().forEach(t => stream.removeTrack(t));
+            return { ...prev, [userId]: new MediaStream(stream.getTracks()) };
+          }
+          return prev;
+        });
+      }
     });
 
     socket.on('room-settings-updated', (info) => {
@@ -303,6 +313,7 @@ const Room = ({ username }) => {
         if (!stream.getTracks().find(t => t.id === event.track.id)) {
           stream.addTrack(event.track);
         }
+        // Force a new reference to ensure React updates
         return { ...prev, [targetId]: new MediaStream(stream.getTracks()) };
       });
     };
@@ -691,6 +702,21 @@ const Room = ({ username }) => {
         </div>
       ))}
 
+      {/* Invisible High-Priority Audio Elements */}
+      {Object.entries(peers).map(([id, stream]) => (
+        <audio 
+          key={`audio-${id}`} 
+          autoPlay 
+          playsInline
+          ref={el => { 
+            if (el && el.srcObject !== stream) {
+              el.srcObject = stream;
+              el.play().catch(() => {});
+            }
+          }} 
+        />
+      ))}
+
       {/* Fullscreen stacked chat toasts — top-right, newest below, each fades in 5s */}
       {isFullscreen && chatToasts.length > 0 && (
         <div className="chat-toast-stack">
@@ -918,10 +944,65 @@ const Room = ({ username }) => {
 
 const VideoPlayer = ({ stream }) => {
   const ref = useRef();
+  const [muted, setMuted] = useState(false);
+  const [showUnmute, setShowUnmute] = useState(false);
+
   useEffect(() => {
-    if (ref.current) ref.current.srcObject = stream;
+    if (ref.current) {
+      if (stream && stream.getVideoTracks().length > 0) {
+        ref.current.srcObject = stream;
+        
+        const attemptPlay = () => {
+          if (!ref.current) return;
+          ref.current.play().then(() => {
+            setShowUnmute(false);
+          }).catch(err => {
+            console.warn("Autoplay blocked, showing unmute button", err);
+            setShowUnmute(true);
+          });
+        };
+
+        attemptPlay();
+        
+        const timeout = setTimeout(attemptPlay, 1000);
+        const interval = setInterval(attemptPlay, 3000); 
+        return () => {
+          clearTimeout(timeout);
+          clearInterval(interval);
+        };
+      } else {
+        ref.current.srcObject = null;
+        setShowUnmute(false);
+      }
+    }
   }, [stream]);
-  return <video ref={ref} autoPlay playsInline className="video-element" />;
+
+  const handleManualUnmute = () => {
+    if (ref.current) {
+      ref.current.play();
+      ref.current.muted = false;
+      setShowUnmute(false);
+    }
+  };
+
+  return (
+    <div className="video-player-container" style={{ width: '100%', height: '100%', position: 'relative' }}>
+      <video 
+        ref={ref} 
+        autoPlay 
+        playsInline 
+        className="video-element"
+      />
+      {showUnmute && (
+        <div className="autoplay-overlay" onClick={handleManualUnmute}>
+          <div className="unmute-badge glass-panel">
+            <MicOff size={16} />
+            <span>Click to enable sound</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 };
 
 export default Room;

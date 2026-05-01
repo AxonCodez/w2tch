@@ -144,6 +144,36 @@
   z-index: 15;
 }
 
+.autoplay-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(4px);
+  z-index: 5;
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+.autoplay-overlay:hover {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.unmute-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  background: var(--accent-primary);
+  color: white;
+  border-radius: var(--border-radius-full);
+  font-weight: 500;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+  animation: fadeIn 0.3s ease;
+}
+
 .pip-container.collapsed .pip-toggle-btn {
   background: var(--accent-primary);
 }
