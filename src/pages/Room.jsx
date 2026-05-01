@@ -55,6 +55,8 @@ const Room = ({ username }) => {
   const chatInputFocusRef = useRef(false);
   const chatInputRef = useRef(null);
 
+  const audioContextRef = useRef(null);
+  const audioDestinationRef = useRef(null);
   const localVideoRef = useRef();
   const peerConnections = useRef({}); 
   const chatEndRef = useRef(null);
@@ -86,9 +88,11 @@ const Room = ({ username }) => {
       navigate('/');
     });
 
-    socket.on('room-joined', ({ users, roomInfo }) => {
+    socket.on('room-joined', ({ users, roomInfo, sharing, cameras }) => {
       setParticipants(users);
       if (roomInfo) setRoomInfo(roomInfo);
+      if (sharing) setRemoteSharers(sharing);
+      if (cameras) setRemoteCameraStatus(cameras);
       
       // Create offer to all existing users
       Object.keys(users).forEach(userId => {
@@ -170,6 +174,7 @@ const Room = ({ username }) => {
     });
 
     socket.on('receive-chat', (msg) => {
+      if (msg.roomId !== roomId) return; // Ignore messages from other rooms
       setMessages(prev => [...prev, msg]);
       // Push toast when in fullscreen and user isn't typing
       if (document.fullscreenElement && !chatInputFocusRef.current) {
@@ -181,7 +186,8 @@ const Room = ({ username }) => {
       }
     });
 
-    socket.on('receive-reaction', ({ reaction }) => {
+    socket.on('receive-reaction', ({ reaction, roomId: rId }) => {
+      if (rId !== roomId) return; // Ignore reactions from other rooms
       const newReact = { id: Date.now() + Math.random(), emoji: reaction };
       setReactions(prev => [...prev, newReact]);
       setTimeout(() => {
@@ -207,6 +213,7 @@ const Room = ({ username }) => {
     });
 
     return () => {
+      socket.emit('leave-room', { roomId });
       socket.off('error');
       socket.off('room-joined');
       socket.off('user-connected');
@@ -393,23 +400,60 @@ const Room = ({ username }) => {
     if (!isScreenSharing) {
       try {
         const stream = await navigator.mediaDevices.getDisplayMedia({ 
-          video: { frameRate: { ideal: 60 }, displaySurface: 'monitor' }
+          video: { frameRate: { ideal: 60 } },
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
         });
         
-        const track = stream.getVideoTracks()[0];
-        track.onended = () => stopScreenShare();
+        const videoTrack = stream.getVideoTracks()[0];
+        const screenAudioTrack = stream.getAudioTracks()[0];
+        
+        videoTrack.onended = () => stopScreenShare();
+
+        let finalAudioTrack = screenAudioTrack;
+
+        // If mic is on, mix it with screen audio
+        if (micOn && screenAudioTrack) {
+          const micTrack = localStream.getAudioTracks()[0];
+          if (micTrack) {
+            audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+            audioDestinationRef.current = audioContextRef.current.createMediaStreamDestination();
+            
+            const micSource = audioContextRef.current.createMediaStreamSource(new MediaStream([micTrack]));
+            const screenSource = audioContextRef.current.createMediaStreamSource(new MediaStream([screenAudioTrack]));
+            
+            micSource.connect(audioDestinationRef.current);
+            screenSource.connect(audioDestinationRef.current);
+            
+            finalAudioTrack = audioDestinationRef.current.stream.getAudioTracks()[0];
+          }
+        }
 
         setLocalStream(prev => {
-          prev.getVideoTracks().forEach(t => t.stop()); 
-          const newStream = new MediaStream(prev.getTracks().filter(t => t.kind !== 'video'));
-          newStream.addTrack(track);
+          let tracks = prev.getTracks().filter(t => t.kind !== 'video');
+          
+          if (finalAudioTrack) {
+            // Only replace audio if we have a new combined track
+            tracks = tracks.filter(t => t.kind !== 'audio');
+            tracks.push(finalAudioTrack);
+          }
+
+          const newStream = new MediaStream([...tracks, videoTrack]);
           if (localVideoRef.current) localVideoRef.current.srcObject = newStream;
           return newStream;
         });
 
         Object.values(peerConnections.current).forEach(pc => {
-          const transceiver = pc.getTransceivers().find(t => t.receiver.track.kind === 'video');
-          if (transceiver) transceiver.sender.replaceTrack(track);
+          const vTransceiver = pc.getTransceivers().find(t => t.receiver.track.kind === 'video');
+          if (vTransceiver) vTransceiver.sender.replaceTrack(videoTrack);
+          
+          if (finalAudioTrack) {
+            const aTransceiver = pc.getTransceivers().find(t => t.receiver.track.kind === 'audio');
+            if (aTransceiver) aTransceiver.sender.replaceTrack(finalAudioTrack);
+          }
         });
 
         setIsScreenSharing(true);
@@ -425,20 +469,27 @@ const Room = ({ username }) => {
   };
 
   const stopScreenShare = () => {
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    
     setLocalStream(prev => {
-      prev.getVideoTracks().forEach(t => t.stop());
-      const newStream = new MediaStream(prev.getTracks().filter(t => t.kind !== 'video'));
+      prev.getTracks().forEach(t => t.stop());
+      const newStream = new MediaStream();
       if (localVideoRef.current) localVideoRef.current.srcObject = newStream;
       return newStream;
     });
 
     Object.values(peerConnections.current).forEach(pc => {
-      const transceiver = pc.getTransceivers().find(t => t.receiver.track.kind === 'video');
-      if (transceiver) transceiver.sender.replaceTrack(null);
+      pc.getTransceivers().forEach(t => t.sender.replaceTrack(null));
     });
     
     setIsScreenSharing(false);
+    setMicOn(false);
+    setVideoOn(false);
     socket.emit('screen-share-status', { roomId, isSharing: false });
+    socket.emit('camera-status', { roomId, isOn: false });
   };
 
   const sendChat = (e) => {
@@ -462,7 +513,10 @@ const Room = ({ username }) => {
     socket.emit('send-reaction', { roomId, reaction: emoji });
   };
 
-  const handleLeave = () => navigate('/');
+  const handleLeave = () => {
+    socket.emit('leave-room', { roomId });
+    navigate('/');
+  };
 
   const activeSharerId = isScreenSharing ? 'local' : Object.keys(remoteSharers).find(id => remoteSharers[id]);
 

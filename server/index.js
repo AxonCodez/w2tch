@@ -38,6 +38,8 @@ io.on('connection', (socket) => {
           memberLimit: 10,
           password: password || null,
           users: {},
+          sharing: {}, // Track who is sharing screen
+          cameras: {}, // Track who has camera on
           createdAt: Date.now()
         };
       } else {
@@ -62,6 +64,11 @@ io.on('connection', (socket) => {
     const room = rooms[roomId];
     room.users[socket.id] = { id: socket.id, username, avatar };
     
+    // Leave all previous rooms to prevent cross-room chat leaks
+    socket.rooms.forEach(room => {
+      if (room !== socket.id) socket.leave(room);
+    });
+
     socket.join(roomId);
     
     // Notify others in the room
@@ -71,6 +78,8 @@ io.on('connection', (socket) => {
     socket.emit('room-joined', { 
       roomId, 
       users: room.users,
+      sharing: room.sharing,
+      cameras: room.cameras,
       roomInfo: {
         title: room.title,
         watching: room.watching,
@@ -111,18 +120,22 @@ io.on('connection', (socket) => {
 
   // Chat & Reactions
   socket.on('send-chat', ({ roomId, message, username }) => {
-    io.to(roomId).emit('receive-chat', { userId: socket.id, username, message, timestamp: Date.now() });
+    io.to(roomId).emit('receive-chat', { roomId, userId: socket.id, username, message, timestamp: Date.now() });
   });
 
   socket.on('send-reaction', ({ roomId, reaction }) => {
-    io.to(roomId).emit('receive-reaction', { userId: socket.id, reaction });
+    io.to(roomId).emit('receive-reaction', { roomId, userId: socket.id, reaction });
   });
 
   socket.on('screen-share-status', ({ roomId, isSharing }) => {
+    const room = rooms[roomId];
+    if (room) room.sharing[socket.id] = isSharing;
     socket.to(roomId).emit('screen-share-status', { userId: socket.id, isSharing });
   });
 
   socket.on('camera-status', ({ roomId, isOn }) => {
+    const room = rooms[roomId];
+    if (room) room.cameras[socket.id] = isOn;
     socket.to(roomId).emit('camera-status', { userId: socket.id, isOn });
   });
 
@@ -144,6 +157,22 @@ io.on('connection', (socket) => {
     if (room && room.creatorId === socket.id) {
       io.to(roomId).emit('room-deleted');
       delete rooms[roomId];
+      io.emit('update-room-list', getPublicRooms());
+    }
+  });
+
+  socket.on('leave-room', ({ roomId }) => {
+    const room = rooms[roomId];
+    if (room && room.users[socket.id]) {
+      delete room.users[socket.id];
+      delete room.sharing[socket.id];
+      delete room.cameras[socket.id];
+      socket.leave(roomId);
+      socket.to(roomId).emit('user-disconnected', socket.id);
+      
+      if (Object.keys(room.users).length === 0) {
+        delete rooms[roomId];
+      }
       io.emit('update-room-list', getPublicRooms());
     }
   });
