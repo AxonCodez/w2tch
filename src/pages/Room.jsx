@@ -533,6 +533,26 @@ const Room = ({ username }) => {
 
   const activeSharerId = isScreenSharing ? 'local' : Object.keys(remoteSharers).find(id => remoteSharers[id]);
 
+  // Auto-mute all mics when someone starts sharing screen (Cinema Mode)
+  useEffect(() => {
+    if (activeSharerId && micOn && activeSharerId !== 'local') {
+      // If someone else starts sharing, mute myself automatically
+      setLocalStream(prev => {
+        prev.getAudioTracks().forEach(t => t.stop());
+        const newStream = new MediaStream(prev.getTracks().filter(t => t.kind !== 'audio'));
+        if (localVideoRef.current) localVideoRef.current.srcObject = newStream;
+        return newStream;
+      });
+
+      Object.values(peerConnections.current).forEach(pc => {
+        const transceiver = pc.getTransceivers().find(t => t.receiver.track.kind === 'audio');
+        if (transceiver) transceiver.sender.replaceTrack(null);
+      });
+      
+      setMicOn(false);
+    }
+  }, [activeSharerId]);
+
   // Voice Activity Detection
   useEffect(() => {
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
