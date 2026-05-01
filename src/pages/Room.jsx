@@ -301,6 +301,16 @@ const Room = ({ username }) => {
       });
     }
 
+    pc.onnegotiationneeded = async () => {
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit('offer', { target: targetId, sdp: pc.localDescription });
+      } catch (err) {
+        console.error("Negotiation error:", err);
+      }
+    };
+
     pc.onicecandidate = (event) => {
       if (event.candidate) {
         socket.emit('ice-candidate', { target: targetId, candidate: event.candidate });
@@ -469,6 +479,11 @@ const Room = ({ username }) => {
           }
         });
 
+        // Trigger manual negotiation to ensure quality and visibility
+        Object.values(peerConnections.current).forEach(pc => {
+          pc.onnegotiationneeded();
+        });
+
         setIsScreenSharing(true);
         setVideoOn(false); 
         socket.emit('screen-share-status', { roomId, isSharing: true });
@@ -496,6 +511,7 @@ const Room = ({ username }) => {
 
     Object.values(peerConnections.current).forEach(pc => {
       pc.getTransceivers().forEach(t => t.sender.replaceTrack(null));
+      pc.onnegotiationneeded();
     });
     
     setIsScreenSharing(false);
