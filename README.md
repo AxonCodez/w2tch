@@ -2,7 +2,7 @@
 
 **W2tch** is a high-performance, real-time watch party platform designed for cinema-grade screen sharing and seamless collaboration. Built with WebRTC and Socket.io, it delivers ultra-low latency 4K 60FPS streaming with premium aesthetics.
 
-![W2tch Preview](https://github.com/AxonCodez/w2tch/raw/main/preview.png) *(Add your own preview image here)*
+![W2tch Preview](https://w2tch.onrender.com) *(Add your own preview image here)*
 
 ## 🚀 Key Features
 
