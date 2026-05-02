@@ -1089,16 +1089,21 @@ const VideoPlayer = ({ stream }) => {
       const updateStream = () => {
         if (!ref.current) return;
         if (stream.getVideoTracks().length > 0) {
-          ref.current.srcObject = stream;
-          ref.current.play().then(() => {
-            setShowUnmute(false);
-          }).catch(err => {
-            console.warn("Autoplay blocked, showing unmute button", err);
-            setShowUnmute(true);
-          });
+          // ONLY update if the srcObject is actually different to prevent flickering
+          if (ref.current.srcObject !== stream) {
+            ref.current.srcObject = stream;
+            ref.current.play().then(() => {
+              setShowUnmute(false);
+            }).catch(err => {
+              console.warn("Autoplay blocked, showing unmute button", err);
+              setShowUnmute(true);
+            });
+          }
         } else {
-          ref.current.srcObject = null;
-          setShowUnmute(false);
+          if (ref.current.srcObject !== null) {
+            ref.current.srcObject = null;
+            setShowUnmute(false);
+          }
         }
       };
 
