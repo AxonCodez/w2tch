@@ -1081,24 +1081,21 @@
   }
 
   .stats-indicator {
-    position: fixed;
-    top: env(safe-area-inset-top, 1rem);
-    left: 50%;
-    transform: translateX(-50%);
-    width: auto;
+    width: 100%;
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 0.6rem;
-    padding: 0.4rem 0.8rem;
-    border-radius: 100px;
-    background: rgba(15, 10, 30, 0.75);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border: 1px solid rgba(139, 92, 246, 0.3);
-    z-index: 999; /* Ensure it stays above everything on mobile */
+    padding: 0.25rem 0;
+    border-radius: 0;
+    background: transparent;
+    border: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    z-index: 5;
     min-width: unset;
     pointer-events: none;
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+    box-shadow: none;
   }
 
   .bandwidth-meter {
@@ -1158,10 +1155,6 @@
     justify-content: flex-end;
   }
 
-  .stats-indicator {
-    top: 0.5rem;
-    padding: 0.25rem 0.5rem;
-  }
 
   .pip-container {
     bottom: 120px; /* Adjusted for taller control bar */

@@ -16,10 +16,14 @@ const configuration = {
 const optimizeSDP = (sdp) => {
   let newSdp = sdp;
   
-  // Increase Video Bitrate aggressively and force resolution
-  if (newSdp.indexOf('a=fmtp:96') !== -1) {
-    newSdp = newSdp.replace('a=fmtp:96', 'a=fmtp:96 x-google-max-bitrate=25000;x-google-min-bitrate=3000;x-google-start-bitrate=15000');
-  }
+  // Force Ultra High Quality Video Bitrates (40-50 Mbps)
+  newSdp = newSdp.replace(/a=fmtp:(\d+) (.*)/g, (match, p1, p2) => {
+    // Only target video codecs (usually VP8, VP9, H264 which have these params)
+    if (p2.includes('max-fs') || p2.includes('max-fr') || p2.includes('level-asymmetry-allowed')) {
+      return `a=fmtp:${p1} ${p2};x-google-max-bitrate=50000;x-google-min-bitrate=15000;x-google-start-bitrate=30000`;
+    }
+    return match;
+  });
   
   // Force High Quality Audio (Stereo + High Bitrate)
   newSdp = newSdp.replace('useinbandfec=1', 'useinbandfec=1;stereo=1;sprop-stereo=1;maxaveragebitrate=510000');
@@ -381,11 +385,20 @@ const Room = ({ username }) => {
     };
 
     pc.ontrack = (event) => {
+      console.log("Received remote track:", event.track.kind, event.track.id);
       setPeers(prev => {
         const stream = prev[targetId] || new MediaStream();
-        if (!stream.getTracks().find(t => t.id === event.track.id)) {
+        const existingTrack = stream.getTracks().find(t => t.kind === event.track.kind);
+        
+        if (existingTrack) {
+          if (existingTrack.id !== event.track.id) {
+            stream.removeTrack(existingTrack);
+            stream.addTrack(event.track);
+          }
+        } else {
           stream.addTrack(event.track);
         }
+        
         // Force a new reference to ensure React updates
         return { ...prev, [targetId]: new MediaStream(stream.getTracks()) };
       });
@@ -487,22 +500,24 @@ const Room = ({ username }) => {
       try {
         const stream = await navigator.mediaDevices.getDisplayMedia({ 
           video: { 
-            width: { ideal: 1920, max: 3840 },
-            height: { ideal: 1080, max: 2160 },
+            width: { ideal: 3840, max: 3840 },
+            height: { ideal: 2160, max: 2160 },
             frameRate: { ideal: 60, max: 60 },
-            cursor: "always"
+            cursor: "always",
+            displaySurface: "monitor"
           },
           audio: {
             autoGainControl: false,
             echoCancellation: false,
             noiseSuppression: false,
-            channelCount: 2
+            channelCount: 2,
+            sampleRate: 48000
           }
         });
         
         const videoTrack = stream.getVideoTracks()[0];
-        // Use 'motion' for smooth FPS, but we'll rely on high bitrate for sharpness
-        if (videoTrack) videoTrack.contentHint = 'motion';
+        // Set content hint to detail for maximum pixel-perfect sharpness
+        if (videoTrack) videoTrack.contentHint = 'detail';
         const screenAudioTrack = stream.getAudioTracks()[0];
         
         videoTrack.onended = () => stopScreenShare();
@@ -541,29 +556,44 @@ const Room = ({ username }) => {
         });
 
         Object.values(peerConnections.current).forEach(async pc => {
-          const vTransceiver = pc.getTransceivers().find(t => t.receiver.track.kind === 'video');
-          if (vTransceiver) {
-            await vTransceiver.sender.replaceTrack(videoTrack);
-            try {
-              const params = vTransceiver.sender.getParameters();
-              if (!params.encodings) params.encodings = [{}];
-              params.encodings[0].maxBitrate = 20000000; // 20 Mbps for Ultra HD
-              params.encodings[0].priority = 'high';
-              params.encodings[0].networkPriority = 'high';
-              vTransceiver.sender.setParameters(params);
-              
-              // Balanced preference for both sharpness and FPS
-              if ('degradationPreference' in vTransceiver.sender) {
-                vTransceiver.sender.degradationPreference = 'balanced';
-              }
-            } catch (e) {
-              console.warn("Could not set sender parameters", e);
+          // Find existing video sender
+          const senders = pc.getSenders();
+          const vSender = senders.find(s => s.track && s.track.kind === 'video');
+          
+          if (vSender) {
+            // Replace existing track - but let's try to be even more explicit
+            await vSender.replaceTrack(videoTrack);
+          } else {
+            // If no sender exists, add it
+            pc.addTrack(videoTrack, stream);
+          }
+          
+          try {
+            const params = vSender ? vSender.getParameters() : pc.getSenders().find(s => s.track === videoTrack).getParameters();
+            if (!params.encodings) params.encodings = [{}];
+            params.encodings[0].maxBitrate = 40000000; // 40 Mbps for 4K 60FPS
+            params.encodings[0].minBitrate = 10000000; // 10 Mbps floor to prevent blur
+            params.encodings[0].priority = 'high';
+            params.encodings[0].networkPriority = 'high';
+            
+            const senderToUpdate = vSender || pc.getSenders().find(s => s.track === videoTrack);
+            await senderToUpdate.setParameters(params);
+            
+            // CRITICAL: Force resolution maintenance
+            if ('degradationPreference' in senderToUpdate) {
+              senderToUpdate.degradationPreference = 'maintain-resolution';
             }
+          } catch (e) {
+            console.warn("Could not set sender parameters", e);
           }
           
           if (finalAudioTrack) {
-            const aTransceiver = pc.getTransceivers().find(t => t.receiver.track.kind === 'audio');
-            if (aTransceiver) aTransceiver.sender.replaceTrack(finalAudioTrack);
+            const aSender = senders.find(s => s.track && s.track.kind === 'audio');
+            if (aSender) {
+              await aSender.replaceTrack(finalAudioTrack);
+            } else {
+              pc.addTrack(finalAudioTrack, stream);
+            }
           }
         });
 
@@ -865,12 +895,6 @@ const Room = ({ username }) => {
       )}
 
       <div className={`room-main ${!isControlsVisible && isFullscreen ? 'controls-hidden' : ''}`} onClick={toggleControls}>
-        <div className="stats-indicator" title={`Connection Quality: ${networkStats.quality} (${networkStats.bitrate} Mbps)`}>
-          <div className="bandwidth-meter">
-            <div className={`bandwidth-bar ${networkStats.bitrate < 5 ? 'bad' : networkStats.bitrate < 12 ? 'medium' : 'good'}`} style={{ width: `${Math.min(100, (networkStats.bitrate / 25) * 100)}%` }}></div>
-          </div>
-          <span className="bandwidth-label">{networkStats.bitrate} Mbps</span>
-        </div>
         <div className={`video-grid ${activeSharerId ? 'has-active-sharer' : ''}`}>
           {/* Main Stage for the active sharer */}
           {activeSharerId && (
@@ -878,7 +902,7 @@ const Room = ({ username }) => {
               {activeSharerId === 'local' ? (
                 <video ref={localVideoCallback} autoPlay muted playsInline className="video-element" />
               ) : (
-                <VideoPlayer stream={peers[activeSharerId]} />
+                <VideoPlayer key={`stage-${activeSharerId}-${remoteSharers[activeSharerId]}`} stream={peers[activeSharerId]} />
               )}
               <div className="video-badge">
                 {activeSharerId === 'local' ? 'You' : participants[activeSharerId]?.username} (Screen)
@@ -938,6 +962,12 @@ const Room = ({ username }) => {
 
         {isFullscreen && <div className="fullscreen-bottom-trigger" />}
         <div className="control-bar glass-panel">
+          <div className="stats-indicator" title={`Connection Quality: ${networkStats.quality} (${networkStats.bitrate} Mbps)`}>
+            <div className="bandwidth-meter">
+              <div className={`bandwidth-bar ${networkStats.bitrate < 5 ? 'bad' : networkStats.bitrate < 12 ? 'medium' : 'good'}`} style={{ width: `${Math.min(100, (networkStats.bitrate / 25) * 100)}%` }}></div>
+            </div>
+            <span className="bandwidth-label">{networkStats.bitrate} Mbps</span>
+          </div>
           
           <div className="control-buttons">
             <button className={`control-btn ${!micOn ? 'danger' : ''}`} onClick={toggleMic}>
@@ -1094,15 +1124,23 @@ const VideoPlayer = ({ stream }) => {
     if (ref.current && stream) {
       const updateStream = () => {
         if (!ref.current) return;
-        if (stream.getVideoTracks().length > 0) {
-          // ONLY update if the srcObject is actually different to prevent flickering
+        const videoTracks = stream.getVideoTracks();
+        
+        if (videoTracks.length > 0) {
+          const hasActiveTrack = videoTracks.some(t => t.enabled && t.readyState === 'live');
+          
           if (ref.current.srcObject !== stream) {
             ref.current.srcObject = stream;
+          }
+          
+          if (hasActiveTrack) {
             ref.current.play().then(() => {
               setShowUnmute(false);
             }).catch(err => {
-              console.warn("Autoplay blocked, showing unmute button", err);
-              setShowUnmute(true);
+              if (err.name !== 'AbortError') {
+                console.warn("Autoplay blocked, showing unmute button", err);
+                setShowUnmute(true);
+              }
             });
           }
         } else {
