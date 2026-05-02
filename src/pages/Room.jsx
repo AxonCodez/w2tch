@@ -47,10 +47,13 @@ const Room = ({ username }) => {
   
   const [roomInfo, setRoomInfo] = useState({ title: '', watching: '', memberLimit: 10, creatorId: '', description: '' });
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isControlsVisible, setIsControlsVisible] = useState(true);
+  const controlsTimeoutRef = useRef(null);
   const [settingsForm, setSettingsForm] = useState({ title: '', watching: '', memberLimit: 10 });
   
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isChatFloatingOpen, setIsChatFloatingOpen] = useState(false);
+  const [isChatCollapsed, setIsChatCollapsed] = useState(window.innerWidth <= 1024);
 
   // Fullscreen toast stack: [{ id, username, message }]
   const [chatToasts, setChatToasts] = useState([]);
@@ -258,19 +261,56 @@ const Room = ({ username }) => {
       const entering = !!document.fullscreenElement;
       setIsFullscreen(entering);
       if (entering) {
+        setIsControlsVisible(true);
+        resetControlsTimeout();
         setIsChatFloatingOpen(false);
         setIsPipCollapsed(true);
       } else {
+        setIsControlsVisible(true);
         setIsChatFloatingOpen(true);
         setIsPipCollapsed(false);
         setChatToasts([]);
       }
     };
     document.addEventListener('fullscreenchange', handleFsChange);
-    return () => document.removeEventListener('fullscreenchange', handleFsChange);
-  }, []);
+    window.addEventListener('mousemove', handleInteraction);
+    window.addEventListener('touchstart', handleInteraction);
 
-  // Drag handlers removed — PiP is fixed at bottom-right
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFsChange);
+      window.removeEventListener('mousemove', handleInteraction);
+      window.removeEventListener('touchstart', handleInteraction);
+      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+    };
+  }, [isFullscreen]);
+
+  const resetControlsTimeout = () => {
+    if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+    if (isFullscreen) {
+      controlsTimeoutRef.current = setTimeout(() => {
+        setIsControlsVisible(false);
+      }, 3500);
+    }
+  };
+
+  const handleInteraction = () => {
+    if (isFullscreen) {
+      if (!isControlsVisible) setIsControlsVisible(true);
+      resetControlsTimeout();
+    }
+  };
+
+  const toggleControls = (e) => {
+    if (isFullscreen) {
+      if (e.target.closest('button') || e.target.closest('.control-bar')) {
+        setIsControlsVisible(true);
+        resetControlsTimeout();
+        return;
+      }
+      setIsControlsVisible(prev => !prev);
+      resetControlsTimeout();
+    }
+  };
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -424,7 +464,9 @@ const Room = ({ username }) => {
       try {
         const stream = await navigator.mediaDevices.getDisplayMedia({ 
           video: { 
-            frameRate: { ideal: 30 },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            frameRate: { ideal: 60 },
             cursor: "always"
           },
           audio: {
@@ -481,7 +523,7 @@ const Room = ({ username }) => {
             try {
               const params = vTransceiver.sender.getParameters();
               if (!params.encodings) params.encodings = [{}];
-              params.encodings[0].maxBitrate = 3500000; // 3.5 Mbps cap for stability
+              params.encodings[0].maxBitrate = 8000000; // 8 Mbps for Full HD 60FPS
               vTransceiver.sender.setParameters(params);
             } catch (e) {
               console.warn("Could not set sender parameters", e);
@@ -746,7 +788,7 @@ const Room = ({ username }) => {
   }
 
   return (
-    <div className={`room-container ${isFullscreen ? 'is-fullscreen' : ''} ${isChatFloatingOpen ? 'chat-open' : ''}`} ref={roomContainerRef}>
+    <div className={`room-container ${isFullscreen ? 'is-fullscreen' : ''} ${isChatFloatingOpen ? 'chat-open' : ''} ${!isFullscreen && isChatCollapsed ? 'chat-collapsed' : ''}`} ref={roomContainerRef}>
       {reactions.map(r => (
         <div key={r.id} className="floating-reaction" style={{ left: `${Math.random() * 80 + 10}%` }}>
           {r.emoji}
@@ -780,7 +822,7 @@ const Room = ({ username }) => {
         </div>
       )}
 
-      <div className="room-main">
+      <div className={`room-main ${!isControlsVisible && isFullscreen ? 'controls-hidden' : ''}`} onClick={toggleControls}>
         <div className={`video-grid ${activeSharerId ? 'has-active-sharer' : ''}`}>
           {/* Main Stage for the active sharer */}
           {activeSharerId && (
@@ -863,8 +905,11 @@ const Room = ({ username }) => {
             <button className={`control-btn ${isScreenSharing ? 'active' : ''}`} onClick={toggleScreenShare}>
               <MonitorUp />
             </button>
-            <button className="control-btn" onClick={toggleFullscreen}>
+            <button className="control-btn fullscreen-btn" onClick={toggleFullscreen}>
               {isFullscreen ? <Shrink /> : <Expand />}
+            </button>
+            <button className={`control-btn ${!isChatCollapsed ? 'active' : ''}`} onClick={() => setIsChatCollapsed(!isChatCollapsed)}>
+              <MessageSquare />
             </button>
             {roomInfo.creatorId === socket?.id && (
               <button className="control-btn" onClick={openSettings}>
@@ -893,9 +938,12 @@ const Room = ({ username }) => {
       )}
 
       {/* Chat sidebar — z-index 50, pip is 60 so pip appears above chat */}
-      <div className={`room-sidebar glass-panel ${isFullscreen ? 'floating-chat' : ''} ${isFullscreen && !isChatFloatingOpen ? 'hidden' : ''}`}>
-        {isFullscreen && (
-          <button className="close-floating-chat-btn" onClick={() => setIsChatFloatingOpen(false)}>
+      <div className={`room-sidebar glass-panel ${isFullscreen ? 'floating-chat' : ''} ${isFullscreen && !isChatFloatingOpen ? 'hidden' : ''} ${!isFullscreen && isChatCollapsed ? 'collapsed' : ''}`}>
+        {(isFullscreen || isChatCollapsed === false) && (
+          <button className="close-floating-chat-btn" onClick={() => {
+            if (isFullscreen) setIsChatFloatingOpen(false);
+            setIsChatCollapsed(true);
+          }}>
             <X size={18} />
           </button>
         )}
