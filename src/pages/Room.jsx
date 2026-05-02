@@ -16,9 +16,9 @@ const configuration = {
 const optimizeSDP = (sdp) => {
   let newSdp = sdp;
   
-  // Increase Video Bitrate
+  // Increase Video Bitrate aggressively and force resolution
   if (newSdp.indexOf('a=fmtp:96') !== -1) {
-    newSdp = newSdp.replace('a=fmtp:96', 'a=fmtp:96 x-google-max-bitrate=15000;x-google-min-bitrate=5000;x-google-start-bitrate=10000');
+    newSdp = newSdp.replace('a=fmtp:96', 'a=fmtp:96 x-google-max-bitrate=25000;x-google-min-bitrate=3000;x-google-start-bitrate=15000');
   }
   
   // Force High Quality Audio (Stereo + High Bitrate)
@@ -491,14 +491,13 @@ const Room = ({ username }) => {
             autoGainControl: false,
             echoCancellation: false,
             noiseSuppression: false,
-            channelCount: 2,
-            sampleRate: 48000,
-            sampleSize: 16
+            channelCount: 2
           }
         });
         
         const videoTrack = stream.getVideoTracks()[0];
-        if (videoTrack) videoTrack.contentHint = 'motion';
+        // Use 'detail' to prioritize resolution/sharpness over motion smoothness if it becomes blurry
+        if (videoTrack) videoTrack.contentHint = 'detail';
         const screenAudioTrack = stream.getAudioTracks()[0];
         
         videoTrack.onended = () => stopScreenShare();
@@ -543,12 +542,12 @@ const Room = ({ username }) => {
             try {
               const params = vTransceiver.sender.getParameters();
               if (!params.encodings) params.encodings = [{}];
-              params.encodings[0].maxBitrate = 15000000; // 15 Mbps for Ultra HD 60FPS
+              params.encodings[0].maxBitrate = 20000000; // 20 Mbps for Ultra HD
               params.encodings[0].priority = 'high';
               params.encodings[0].networkPriority = 'high';
               vTransceiver.sender.setParameters(params);
               
-              // Maintain resolution for high-quality movie sharing
+              // Force maintain-resolution at the sender level
               if ('degradationPreference' in vTransceiver.sender) {
                 vTransceiver.sender.degradationPreference = 'maintain-resolution';
               }
