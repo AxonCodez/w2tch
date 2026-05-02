@@ -496,8 +496,8 @@ const Room = ({ username }) => {
         });
         
         const videoTrack = stream.getVideoTracks()[0];
-        // Use 'detail' to prioritize resolution/sharpness over motion smoothness if it becomes blurry
-        if (videoTrack) videoTrack.contentHint = 'detail';
+        // Use 'motion' for smooth FPS, but we'll rely on high bitrate for sharpness
+        if (videoTrack) videoTrack.contentHint = 'motion';
         const screenAudioTrack = stream.getAudioTracks()[0];
         
         videoTrack.onended = () => stopScreenShare();
@@ -547,9 +547,9 @@ const Room = ({ username }) => {
               params.encodings[0].networkPriority = 'high';
               vTransceiver.sender.setParameters(params);
               
-              // Force maintain-resolution at the sender level
+              // Balanced preference for both sharpness and FPS
               if ('degradationPreference' in vTransceiver.sender) {
-                vTransceiver.sender.degradationPreference = 'maintain-resolution';
+                vTransceiver.sender.degradationPreference = 'balanced';
               }
             } catch (e) {
               console.warn("Could not set sender parameters", e);
