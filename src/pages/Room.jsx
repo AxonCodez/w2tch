@@ -49,7 +49,7 @@ const Room = ({ username }) => {
   const [messages, setMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
   const [reactions, setReactions] = useState([]);
-  const [networkStats, setNetworkStats] = useState({ ping: 0, quality: 'Good' });
+  const [networkStats, setNetworkStats] = useState({ bitrate: 25, quality: 'Good' });
   const [isPipCollapsed, setIsPipCollapsed] = useState(false);
   const [volumes, setVolumes] = useState({}); // { userId: isTalking }
   const [isPipHorizontal, setIsPipHorizontal] = useState(false);
@@ -331,11 +331,16 @@ const Room = ({ username }) => {
 
   useEffect(() => {
     const interval = setInterval(() => {
+      // Simulate fluctuating bitrate based on screen sharing status
+      const baseBitrate = isScreenSharing ? 20 : 5;
+      const fluctuation = Math.random() * 5 - 2.5;
+      const currentBitrate = Math.max(1, baseBitrate + fluctuation);
+      
       setNetworkStats({
-        ping: Math.floor(Math.random() * 10) + 5,
-        quality: isScreenSharing ? 'Ultra HD 60FPS (15Mbps)' : '1080p HD'
+        bitrate: currentBitrate.toFixed(1),
+        quality: isScreenSharing ? 'Ultra HD 60FPS' : '1080p HD'
       });
-    }, 2000);
+    }, 3000);
     return () => clearInterval(interval);
   }, [isScreenSharing]);
 
@@ -860,6 +865,12 @@ const Room = ({ username }) => {
       )}
 
       <div className={`room-main ${!isControlsVisible && isFullscreen ? 'controls-hidden' : ''}`} onClick={toggleControls}>
+        <div className="stats-indicator" title={`Connection Quality: ${networkStats.quality} (${networkStats.bitrate} Mbps)`}>
+          <div className="bandwidth-meter">
+            <div className={`bandwidth-bar ${networkStats.bitrate < 5 ? 'bad' : networkStats.bitrate < 12 ? 'medium' : 'good'}`} style={{ width: `${Math.min(100, (networkStats.bitrate / 25) * 100)}%` }}></div>
+          </div>
+          <span className="bandwidth-label">{networkStats.bitrate} Mbps</span>
+        </div>
         <div className={`video-grid ${activeSharerId ? 'has-active-sharer' : ''}`}>
           {/* Main Stage for the active sharer */}
           {activeSharerId && (
@@ -927,10 +938,6 @@ const Room = ({ username }) => {
 
         {isFullscreen && <div className="fullscreen-bottom-trigger" />}
         <div className="control-bar glass-panel">
-          <div className="stats-indicator">
-            <Info size={16} />
-            <span>Ping: {networkStats.ping}ms | {networkStats.quality}</span>
-          </div>
           
           <div className="control-buttons">
             <button className={`control-btn ${!micOn ? 'danger' : ''}`} onClick={toggleMic}>
