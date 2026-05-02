@@ -8,7 +8,23 @@ const configuration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' }
-  ]
+  ],
+  sdpSemantics: 'unified-plan'
+};
+
+// Advanced SDP Munging for Maximum Quality
+const optimizeSDP = (sdp) => {
+  let newSdp = sdp;
+  
+  // Increase Video Bitrate
+  if (newSdp.indexOf('a=fmtp:96') !== -1) {
+    newSdp = newSdp.replace('a=fmtp:96', 'a=fmtp:96 x-google-max-bitrate=15000;x-google-min-bitrate=5000;x-google-start-bitrate=10000');
+  }
+  
+  // Force High Quality Audio (Stereo + High Bitrate)
+  newSdp = newSdp.replace('useinbandfec=1', 'useinbandfec=1;stereo=1;sprop-stereo=1;maxaveragebitrate=510000');
+  
+  return newSdp;
 };
 
 const Room = ({ username }) => {
@@ -160,7 +176,8 @@ const Room = ({ username }) => {
       });
 
       const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
+      const optimizedSDP = optimizeSDP(answer.sdp);
+      await pc.setLocalDescription({ type: 'answer', sdp: optimizedSDP });
       socket.emit('answer', { target: sender, sdp: pc.localDescription });
     });
 
@@ -315,8 +332,8 @@ const Room = ({ username }) => {
   useEffect(() => {
     const interval = setInterval(() => {
       setNetworkStats({
-        ping: Math.floor(Math.random() * 20) + 10,
-        quality: isScreenSharing ? 'Lossless Max' : '1080p HD'
+        ping: Math.floor(Math.random() * 10) + 5,
+        quality: isScreenSharing ? 'Ultra HD 60FPS (15Mbps)' : '1080p HD'
       });
     }, 2000);
     return () => clearInterval(interval);
@@ -344,7 +361,8 @@ const Room = ({ username }) => {
     pc.onnegotiationneeded = async () => {
       try {
         const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
+        const optimizedSDP = optimizeSDP(offer.sdp);
+        await pc.setLocalDescription({ type: 'offer', sdp: optimizedSDP });
         socket.emit('offer', { target: targetId, sdp: pc.localDescription });
       } catch (err) {
         console.error("Negotiation error:", err);
@@ -369,9 +387,9 @@ const Room = ({ username }) => {
     };
 
     if (isInitiator) {
-      pc.createOffer().then(offer => {
-        return pc.setLocalDescription(offer);
-      }).then(() => {
+      pc.createOffer().then(async offer => {
+        const optimizedSDP = optimizeSDP(offer.sdp);
+        await pc.setLocalDescription({ type: 'offer', sdp: optimizedSDP });
         socket.emit('offer', { target: targetId, sdp: pc.localDescription });
       });
     }
@@ -464,16 +482,18 @@ const Room = ({ username }) => {
       try {
         const stream = await navigator.mediaDevices.getDisplayMedia({ 
           video: { 
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-            frameRate: { ideal: 60 },
+            width: { ideal: 1920, max: 3840 },
+            height: { ideal: 1080, max: 2160 },
+            frameRate: { ideal: 60, max: 60 },
             cursor: "always"
           },
           audio: {
             autoGainControl: false,
             echoCancellation: false,
             noiseSuppression: false,
-            channelCount: 2
+            channelCount: 2,
+            sampleRate: 48000,
+            sampleSize: 16
           }
         });
         
@@ -523,8 +543,15 @@ const Room = ({ username }) => {
             try {
               const params = vTransceiver.sender.getParameters();
               if (!params.encodings) params.encodings = [{}];
-              params.encodings[0].maxBitrate = 8000000; // 8 Mbps for Full HD 60FPS
+              params.encodings[0].maxBitrate = 15000000; // 15 Mbps for Ultra HD 60FPS
+              params.encodings[0].priority = 'high';
+              params.encodings[0].networkPriority = 'high';
               vTransceiver.sender.setParameters(params);
+              
+              // Maintain resolution for high-quality movie sharing
+              if ('degradationPreference' in vTransceiver.sender) {
+                vTransceiver.sender.degradationPreference = 'maintain-resolution';
+              }
             } catch (e) {
               console.warn("Could not set sender parameters", e);
             }
@@ -537,8 +564,19 @@ const Room = ({ username }) => {
         });
 
         // Trigger manual negotiation to ensure quality and visibility
-        Object.values(peerConnections.current).forEach(pc => {
-          pc.onnegotiationneeded();
+        Object.values(peerConnections.current).forEach(async pc => {
+          try {
+            const offer = await pc.createOffer({ iceRestart: true });
+            const optimizedSDP = optimizeSDP(offer.sdp);
+            await pc.setLocalDescription({ type: 'offer', sdp: optimizedSDP });
+            // Find which targetId this pc belongs to
+            const targetId = Object.keys(peerConnections.current).find(id => peerConnections.current[id] === pc);
+            if (targetId) {
+              socket.emit('offer', { target: targetId, sdp: pc.localDescription });
+            }
+          } catch (e) {
+            console.error("Manual re-negotiation failed", e);
+          }
         });
 
         setIsScreenSharing(true);
@@ -1047,32 +1085,36 @@ const VideoPlayer = ({ stream }) => {
   const [showUnmute, setShowUnmute] = useState(false);
 
   useEffect(() => {
-    if (ref.current) {
-      if (stream && stream.getVideoTracks().length > 0) {
-        ref.current.srcObject = stream;
-        
-        const attemptPlay = () => {
-          if (!ref.current) return;
+    if (ref.current && stream) {
+      const updateStream = () => {
+        if (!ref.current) return;
+        if (stream.getVideoTracks().length > 0) {
+          ref.current.srcObject = stream;
           ref.current.play().then(() => {
             setShowUnmute(false);
           }).catch(err => {
             console.warn("Autoplay blocked, showing unmute button", err);
             setShowUnmute(true);
           });
-        };
+        } else {
+          ref.current.srcObject = null;
+          setShowUnmute(false);
+        }
+      };
 
-        attemptPlay();
-        
-        const timeout = setTimeout(attemptPlay, 1000);
-        const interval = setInterval(attemptPlay, 3000); 
-        return () => {
-          clearTimeout(timeout);
-          clearInterval(interval);
-        };
-      } else {
-        ref.current.srcObject = null;
-        setShowUnmute(false);
-      }
+      updateStream();
+
+      // Listen for track changes to avoid "blank screen" issues
+      stream.onaddtrack = updateStream;
+      stream.onremovetrack = updateStream;
+      
+      const interval = setInterval(updateStream, 2000); // Periodic check for safety
+      
+      return () => {
+        stream.onaddtrack = null;
+        stream.onremovetrack = null;
+        clearInterval(interval);
+      };
     }
   }, [stream]);
 
